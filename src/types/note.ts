@@ -8,6 +8,7 @@ export interface Note {
   updatedAt: Date;
   voiceNotes: VoiceNote[];
   drawing?: string; // base64 data URL
+  drawing3D?: string; // serialized 3D strokes
 }
 
 export interface VoiceNote {
