@@ -1,19 +1,104 @@
 import { useRef, useState, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
+import { OrbitControls, PerspectiveCamera, useGLTF } from "@react-three/drei";
 import { Button } from "@/components/ui/button";
 import { useNotesStore } from "@/store/useNotesStore";
 import { Canvas3DToolbar } from "./Canvas3DToolbar";
 import { Download, Maximize2, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
 import * as THREE from "three";
+import { VRButton, XR, createXRStore } from "@react-three/xr";
 
 interface Stroke {
   points: THREE.Vector3[];
   color: string;
   thickness: number;
   glow: boolean;
+  isParticle?: boolean;
 }
+
+interface Shape3D {
+  id: string;
+  type: "sphere" | "cube" | "cylinder" | "cone" | "torus";
+  position: THREE.Vector3;
+  color: string;
+  scale: number;
+  glow: boolean;
+}
+
+interface Model3D {
+  id: string;
+  url: string;
+  position: THREE.Vector3;
+  scale: number;
+  rotation: THREE.Euler;
+}
+
+interface ParticlePoint {
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  life: number;
+  color: string;
+}
+
+const ShapeComponent = ({ shape }: { shape: Shape3D }) => {
+  const getGeometry = () => {
+    switch (shape.type) {
+      case "sphere":
+        return <sphereGeometry args={[1, 32, 32]} />;
+      case "cube":
+        return <boxGeometry args={[1, 1, 1]} />;
+      case "cylinder":
+        return <cylinderGeometry args={[1, 1, 2, 32]} />;
+      case "cone":
+        return <coneGeometry args={[1, 2, 32]} />;
+      case "torus":
+        return <torusGeometry args={[1, 0.4, 16, 100]} />;
+    }
+  };
+
+  return (
+    <mesh position={shape.position} scale={shape.scale}>
+      {getGeometry()}
+      <meshStandardMaterial
+        color={shape.color}
+        emissive={shape.glow ? shape.color : undefined}
+        emissiveIntensity={shape.glow ? 0.5 : 0}
+      />
+    </mesh>
+  );
+};
+
+const ModelComponent = ({ model }: { model: Model3D }) => {
+  const { scene } = useGLTF(model.url);
+  return (
+    <primitive
+      object={scene.clone()}
+      position={model.position}
+      scale={model.scale}
+      rotation={model.rotation}
+    />
+  );
+};
+
+const ParticleSystem = ({ particles }: { particles: ParticlePoint[] }) => {
+  return (
+    <>
+      {particles.map((particle, i) => (
+        <mesh key={i} position={particle.position}>
+          <sphereGeometry args={[0.05, 8, 8]} />
+          <meshStandardMaterial
+            color={particle.color}
+            emissive={particle.color}
+            emissiveIntensity={0.8}
+            transparent
+            opacity={particle.life}
+          />
+        </mesh>
+      ))}
+    </>
+  );
+};
 
 const Scene = ({
   strokes,
@@ -22,6 +107,9 @@ const Scene = ({
   brushColor,
   brushThickness,
   glowMode,
+  shapes,
+  models,
+  particles,
 }: {
   strokes: Stroke[];
   currentStroke: THREE.Vector3[];
@@ -29,6 +117,9 @@ const Scene = ({
   brushColor: string;
   brushThickness: number;
   glowMode: boolean;
+  shapes: Shape3D[];
+  models: Model3D[];
+  particles: ParticlePoint[];
 }) => {
   return (
     <>
@@ -78,6 +169,19 @@ const Scene = ({
         );
       })}
       
+      {/* Render 3D shapes */}
+      {shapes.map((shape) => (
+        <ShapeComponent key={shape.id} shape={shape} />
+      ))}
+      
+      {/* Render imported models */}
+      {models.map((model) => (
+        <ModelComponent key={model.id} model={model} />
+      ))}
+      
+      {/* Render particles */}
+      <ParticleSystem particles={particles} />
+      
       {/* Grid helper */}
       <gridHelper args={[20, 20, "#888888", "#444444"]} />
     </>
@@ -86,6 +190,7 @@ const Scene = ({
 
 export const Canvas3D = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [currentStroke, setCurrentStroke] = useState<THREE.Vector3[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -95,6 +200,13 @@ export const Canvas3D = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [history, setHistory] = useState<Stroke[][]>([[]]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  const [toolMode, setToolMode] = useState<"draw" | "shape" | "particle">("draw");
+  const [selectedShape, setSelectedShape] = useState<"sphere" | "cube" | "cylinder" | "cone" | "torus">("sphere");
+  const [shapes, setShapes] = useState<Shape3D[]>([]);
+  const [models, setModels] = useState<Model3D[]>([]);
+  const [particles, setParticles] = useState<ParticlePoint[]>([]);
+  const [isVRMode, setIsVRMode] = useState(false);
+  const vrStore = createXRStore();
   
   const { getSelectedNote, updateNote } = useNotesStore();
   const selectedNote = getSelectedNote();
@@ -133,41 +245,124 @@ export const Canvas3D = () => {
 
   const handlePointerDown = (e: any) => {
     if (e.button !== 0) return; // Only left click
-    setIsDrawing(true);
-    setCurrentStroke([]);
+    
+    if (toolMode === "shape") {
+      // Place a shape at the clicked point
+      const newShape: Shape3D = {
+        id: `shape-${Date.now()}`,
+        type: selectedShape,
+        position: e.point.clone(),
+        color: brushColor,
+        scale: brushThickness * 3,
+        glow: glowMode,
+      };
+      setShapes([...shapes, newShape]);
+      toast.success(`${selectedShape} placed`);
+    } else if (toolMode === "particle") {
+      // Create particle burst at clicked point
+      const particleCount = 20;
+      const newParticles: ParticlePoint[] = [];
+      for (let i = 0; i < particleCount; i++) {
+        newParticles.push({
+          position: e.point.clone(),
+          velocity: new THREE.Vector3(
+            (Math.random() - 0.5) * 0.2,
+            Math.random() * 0.3,
+            (Math.random() - 0.5) * 0.2
+          ),
+          life: 1,
+          color: brushColor,
+        });
+      }
+      setParticles([...particles, ...newParticles]);
+    } else {
+      setIsDrawing(true);
+      setCurrentStroke([]);
+    }
   };
 
   const handlePointerMove = (e: any) => {
-    if (!isDrawing) return;
+    if (!isDrawing || toolMode === "shape") return;
     
     const point = e.point;
-    setCurrentStroke(prev => [...prev, point.clone()]);
+    
+    if (toolMode === "particle") {
+      // Continuous particle trail while drawing
+      const newParticles: ParticlePoint[] = [];
+      for (let i = 0; i < 5; i++) {
+        newParticles.push({
+          position: point.clone(),
+          velocity: new THREE.Vector3(
+            (Math.random() - 0.5) * 0.1,
+            Math.random() * 0.15,
+            (Math.random() - 0.5) * 0.1
+          ),
+          life: 1,
+          color: brushColor,
+        });
+      }
+      setParticles([...particles, ...newParticles]);
+    } else {
+      setCurrentStroke(prev => [...prev, point.clone()]);
+    }
   };
 
   const handlePointerUp = () => {
-    if (!isDrawing || currentStroke.length === 0) {
+    if (!isDrawing || toolMode === "shape" || (currentStroke.length === 0 && toolMode === "draw")) {
       setIsDrawing(false);
       return;
     }
     
-    const newStroke: Stroke = {
-      points: currentStroke,
-      color: brushColor,
-      thickness: brushThickness,
-      glow: glowMode
-    };
+    if (toolMode === "draw") {
+      const newStroke: Stroke = {
+        points: currentStroke,
+        color: brushColor,
+        thickness: brushThickness,
+        glow: glowMode,
+        isParticle: false
+      };
+      
+      const newStrokes = [...strokes, newStroke];
+      setStrokes(newStrokes);
+      setCurrentStroke([]);
+      
+      // Add to history
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(newStrokes);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+    }
     
-    const newStrokes = [...strokes, newStroke];
-    setStrokes(newStrokes);
-    setCurrentStroke([]);
     setIsDrawing(false);
-    
-    // Add to history
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newStrokes);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
   };
+
+  // Particle animation loop
+  useEffect(() => {
+    if (particles.length === 0) return;
+    
+    const interval = setInterval(() => {
+      setParticles(prevParticles => {
+        return prevParticles
+          .map(p => ({
+            ...p,
+            position: new THREE.Vector3(
+              p.position.x + p.velocity.x,
+              p.position.y + p.velocity.y,
+              p.position.z + p.velocity.z
+            ),
+            velocity: new THREE.Vector3(
+              p.velocity.x,
+              p.velocity.y - 0.01, // gravity
+              p.velocity.z
+            ),
+            life: p.life - 0.02,
+          }))
+          .filter(p => p.life > 0);
+      });
+    }, 50);
+    
+    return () => clearInterval(interval);
+  }, [particles.length]);
 
   const handleUndo = () => {
     if (historyIndex > 0) {
@@ -185,12 +380,37 @@ export const Canvas3D = () => {
 
   const handleClear = () => {
     setStrokes([]);
+    setShapes([]);
+    setModels([]);
+    setParticles([]);
     setHistory([[]]);
     setHistoryIndex(0);
     if (selectedNote) {
       updateNote(selectedNote.id, { drawing3D: undefined });
     }
     toast.success("3D canvas cleared");
+  };
+
+  const handleImportModel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!file.name.endsWith('.glb') && !file.name.endsWith('.gltf')) {
+      toast.error("Please upload a .glb or .gltf file");
+      return;
+    }
+    
+    const url = URL.createObjectURL(file);
+    const newModel: Model3D = {
+      id: `model-${Date.now()}`,
+      url,
+      position: new THREE.Vector3(0, 0, 0),
+      scale: 1,
+      rotation: new THREE.Euler(0, 0, 0),
+    };
+    
+    setModels([...models, newModel]);
+    toast.success("3D model imported");
   };
 
   const handleExportScreenshot = async () => {
@@ -217,6 +437,14 @@ export const Canvas3D = () => {
 
   return (
     <div className={`relative ${isFullscreen ? 'fixed inset-0 z-50 bg-background' : 'h-full'}`}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".glb,.gltf"
+        onChange={handleImportModel}
+        className="hidden"
+      />
+      
       <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start">
         <Canvas3DToolbar
           brushColor={brushColor}
@@ -231,6 +459,13 @@ export const Canvas3D = () => {
           onSave={saveToNote}
           canUndo={historyIndex > 0}
           canRedo={historyIndex < history.length - 1}
+          toolMode={toolMode}
+          setToolMode={setToolMode}
+          selectedShape={selectedShape}
+          setSelectedShape={setSelectedShape}
+          onImportModel={() => fileInputRef.current?.click()}
+          onToggleVR={() => setIsVRMode(!isVRMode)}
+          isVRMode={isVRMode}
         />
         
         <div className="flex gap-2">
@@ -258,27 +493,37 @@ export const Canvas3D = () => {
       </div>
 
       <div ref={canvasRef} className="w-full h-full rounded-lg overflow-hidden bg-gradient-to-br from-background to-secondary/10">
+        {isVRMode && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto">
+            <VRButton store={vrStore} />
+          </div>
+        )}
         <Canvas>
-          <PerspectiveCamera makeDefault position={[5, 5, 5]} />
-          <OrbitControls enableDamping dampingFactor={0.05} />
-          
-          <mesh
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            visible={false}
-          >
-            <planeGeometry args={[100, 100]} />
-          </mesh>
-          
-          <Scene
-            strokes={strokes}
-            currentStroke={currentStroke}
-            isDrawing={isDrawing}
-            brushColor={brushColor}
-            brushThickness={brushThickness}
-            glowMode={glowMode}
-          />
+          <XR store={vrStore}>
+            <PerspectiveCamera makeDefault position={[5, 5, 5]} />
+            <OrbitControls enableDamping dampingFactor={0.05} />
+            
+            <mesh
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              visible={false}
+            >
+              <planeGeometry args={[100, 100]} />
+            </mesh>
+            
+            <Scene
+              strokes={strokes}
+              currentStroke={currentStroke}
+              isDrawing={isDrawing}
+              brushColor={brushColor}
+              brushThickness={brushThickness}
+              glowMode={glowMode}
+              shapes={shapes}
+              models={models}
+              particles={particles}
+            />
+          </XR>
         </Canvas>
       </div>
     </div>

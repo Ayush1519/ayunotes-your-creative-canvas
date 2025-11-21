@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Undo2, Redo2, Trash2, Save, Sparkles } from "lucide-react";
+import { Undo2, Redo2, Trash2, Save, Sparkles, Paintbrush, Box, Sparkle, Upload, Glasses } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Canvas3DToolbarProps {
   brushColor: string;
@@ -16,6 +17,13 @@ interface Canvas3DToolbarProps {
   onSave: () => void;
   canUndo: boolean;
   canRedo: boolean;
+  toolMode: "draw" | "shape" | "particle";
+  setToolMode: (mode: "draw" | "shape" | "particle") => void;
+  selectedShape: "sphere" | "cube" | "cylinder" | "cone" | "torus";
+  setSelectedShape: (shape: "sphere" | "cube" | "cylinder" | "cone" | "torus") => void;
+  onImportModel: () => void;
+  onToggleVR: () => void;
+  isVRMode: boolean;
 }
 
 const PRESET_COLORS = [
@@ -42,9 +50,79 @@ export const Canvas3DToolbar = ({
   onSave,
   canUndo,
   canRedo,
+  toolMode,
+  setToolMode,
+  selectedShape,
+  setSelectedShape,
+  onImportModel,
+  onToggleVR,
+  isVRMode,
 }: Canvas3DToolbarProps) => {
   return (
     <div className="flex flex-col gap-3 p-4 rounded-lg bg-card/95 backdrop-blur-sm shadow-elegant border border-border max-w-xs">
+      {/* Tool Mode Selector */}
+      <div className="space-y-2">
+        <Label className="text-xs font-medium">Tool Mode</Label>
+        <Tabs value={toolMode} onValueChange={(v) => setToolMode(v as any)}>
+          <TabsList className="grid grid-cols-3 w-full">
+            <TabsTrigger value="draw" className="text-xs">
+              <Paintbrush className="h-3 w-3 mr-1" />
+              Draw
+            </TabsTrigger>
+            <TabsTrigger value="shape" className="text-xs">
+              <Box className="h-3 w-3 mr-1" />
+              Shape
+            </TabsTrigger>
+            <TabsTrigger value="particle" className="text-xs">
+              <Sparkle className="h-3 w-3 mr-1" />
+              Particle
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {/* Shape Selector (only visible when shape mode is active) */}
+      {toolMode === "shape" && (
+        <div className="space-y-2">
+          <Label className="text-xs font-medium">Select Shape</Label>
+          <div className="grid grid-cols-5 gap-2">
+            {(["sphere", "cube", "cylinder", "cone", "torus"] as const).map((shape) => (
+              <Button
+                key={shape}
+                onClick={() => setSelectedShape(shape)}
+                variant={selectedShape === shape ? "default" : "outline"}
+                size="sm"
+                className="text-xs capitalize"
+              >
+                {shape[0]}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Import & VR Buttons */}
+      <div className="flex gap-2">
+        <Button
+          onClick={onImportModel}
+          variant="outline"
+          size="sm"
+          className="flex-1"
+        >
+          <Upload className="h-4 w-4 mr-1" />
+          Import 3D
+        </Button>
+        <Button
+          onClick={onToggleVR}
+          variant={isVRMode ? "default" : "outline"}
+          size="sm"
+          className="flex-1"
+        >
+          <Glasses className="h-4 w-4 mr-1" />
+          VR
+        </Button>
+      </div>
+
       {/* Action Buttons */}
       <div className="flex gap-2 flex-wrap">
         <Button
